@@ -26,8 +26,12 @@ namespace HelloWorld
 
         private bool assignedB = false;
 
+        private bool lastConnectedState = false;
+        private string lastModeText = "";
+
         void OnEnable()
         {
+            Application.runInBackground = true;
             var uiDocument = GetComponent<UIDocument>();
             rootVisualElement = uiDocument.rootVisualElement;
             rootVisualElement.Clear();
@@ -84,7 +88,7 @@ namespace HelloWorld
                 var (ok, error) = await namedSessionManager.HostCreateSession(sessionName);
                 SetStatusText(ok ? $"Hosting: {sessionName}" : $"Host failed: {error}");
 
-                if (ok) await RefreshSessionsAsync();
+               
             }
             catch (Exception e)
             {
@@ -201,13 +205,24 @@ namespace HelloWorld
             }
 
             bool connected = nm.IsClient || nm.IsServer;
-            SetMenuVisible(!connected);
 
-            if (!connected)
-                return;
+            if (connected != lastConnectedState)
+            {
+                lastConnectedState = connected;
+                SetMenuVisible(!connected);
+            }
+
+            if (!connected) return;
 
             var mode = nm.IsHost ? "Host" : nm.IsServer ? "Server" : "Client";
-            SetStatusText($"Transport: {nm.NetworkConfig.NetworkTransport.GetType().Name}\nMode: {mode}");
+            string modeText = $"Transport: {nm.NetworkConfig.NetworkTransport.GetType().Name}\nMode: {mode}";
+
+            // Only update if it changed (so disconnect messages don't instantly get overwritten)
+            if (modeText != lastModeText)
+            {
+                lastModeText = modeText;
+                SetStatusText(modeText);
+            }
         }
 
         void SetStatusText(string text) => statusLabel.text = text;

@@ -917,10 +917,10 @@ PlayerSettings:
   captureStartupLogs: {}
   activeInputHandler: 2
   windowsGamepadBackendHint: 0
-  cloudProjectId: e8c492c9-47cb-4b78-ac2b-ac1ec3af67a6
+  cloudProjectId: e9d6b524-0e46-4c45-be79-2b10f006eec1
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: Flip you 2025-10-21_17-16-24
+  projectName: Flip you
   organizationId: unity_9be6fa1fb643cf868153
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0

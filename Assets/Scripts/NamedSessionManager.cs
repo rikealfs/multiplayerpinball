@@ -21,7 +21,7 @@ public class NamedSessionManager : MonoBehaviour
 
     [Header("Settings")]
     [SerializeField] private int maxPlayers = 2;
-    [SerializeField] private float connectTimeoutSeconds = 12f;
+    [SerializeField] private float connectTimeoutSeconds = 30f;
 
     private string joinedLobbyId;
     private const string JoinCodeKey = "joinCode";
@@ -35,28 +35,46 @@ public class NamedSessionManager : MonoBehaviour
         if (!unityTransport && networkManager) unityTransport = networkManager.GetComponent<UnityTransport>();
     }
 
+    private void Start()
+    {
+        ResolveRefs();
+
+        // Helpful debug events (will show you exactly what's happening)
+        networkManager.OnClientConnectedCallback += id => Debug.Log($"[NGO] CONNECTED: {id}");
+        networkManager.OnClientDisconnectCallback += id => Debug.Log($"[NGO] DISCONNECTED: {id}");
+        networkManager.OnTransportFailure += () => Debug.Log("[NGO] TRANSPORT FAILURE");
+
+        // Important when testing two builds on one machine
+        Application.runInBackground = true;
+    }
+
     private void ResolveRefs()
     {
         if (!networkManager) networkManager = NetworkManager.Singleton;
-        if (!unityTransport) unityTransport = networkManager.GetComponent<UnityTransport>();
-        if (!networkManager || !unityTransport)
-            throw new Exception("NetworkManager/UnityTransport not assigned.");
+
+        if (!unityTransport)
+            unityTransport = networkManager.NetworkConfig.NetworkTransport as UnityTransport;
+
+        if (!networkManager) throw new Exception("NetworkManager not found.");
+        if (!unityTransport) throw new Exception("NetworkTransport is not UnityTransport (check NetworkManager).");
     }
+
+    private bool servicesReady = false;
 
     private async Task EnsureServicesReady()
     {
+        if (servicesReady) return;
+
         if (UnityServices.State != ServicesInitializationState.Initialized)
             await UnityServices.InitializeAsync();
 
-        // Only switch profiles if we are signed out
-        if (AuthenticationService.Instance.IsSignedIn)
-            AuthenticationService.Instance.SignOut();
-
-        // Valid profile: only [A-Za-z0-9_-], <= 30 chars
+        // Choose ONE valid profile per process run
         string profile = "p_" + Guid.NewGuid().ToString("N").Substring(0, 24);
         AuthenticationService.Instance.SwitchProfile(profile);
 
         await AuthenticationService.Instance.SignInAnonymouslyAsync();
+
+        servicesReady = true;
     }
 
     // ---------- HOST ----------
@@ -72,7 +90,7 @@ public class NamedSessionManager : MonoBehaviour
 
             Allocation alloc = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
             string joinCode = await RelayService.Instance.GetJoinCodeAsync(alloc.AllocationId);
-
+            Debug.Log($"[HOST] Relay joinCode={joinCode}");
             var createOptions = new CreateLobbyOptions
             {
                 Data = new Dictionary<string, DataObject>
@@ -84,18 +102,24 @@ public class NamedSessionManager : MonoBehaviour
             Lobby lobby = await LobbyService.Instance.CreateLobbyAsync(sessionName, maxPlayers, createOptions);
             joinedLobbyId = lobby.Id;
 
+            bool useSecure = true; // dtls
+            var endpoint = alloc.ServerEndpoints.First(e => e.ConnectionType == (useSecure ? "dtls" : "udp"));
+
+            Debug.Log($"[HOST] Relay endpoint {endpoint.ConnectionType} {endpoint.Host}:{endpoint.Port}");
+
             unityTransport.SetRelayServerData(
-                alloc.RelayServer.IpV4,
-                (ushort)alloc.RelayServer.Port,
+                endpoint.Host,
+                (ushort)endpoint.Port,
                 alloc.AllocationIdBytes,
                 alloc.Key,
                 alloc.ConnectionData,
                 alloc.ConnectionData,
-                true
+                useSecure
             );
 
             if (!networkManager.StartHost())
                 return (false, "StartHost() failed.");
+
 
             StartLobbyHeartbeat();
 
@@ -179,21 +203,30 @@ public class NamedSessionManager : MonoBehaviour
                 return (false, "Session has no relay join code stored.");
 
             string joinCode = joinCodeObj.Value;
-
+            Debug.Log($"[CLIENT] Lobby joinCode={joinCode}");
             JoinAllocation joinAlloc = await RelayService.Instance.JoinAllocationAsync(joinCode);
 
+            Debug.Log($"Relay join OK. ip={joinAlloc.RelayServer.IpV4}:{joinAlloc.RelayServer.Port}");
+
+            bool useSecure = true; // MUST match host
+            var endpoint = joinAlloc.ServerEndpoints.First(e => e.ConnectionType == (useSecure ? "dtls" : "udp"));
+
+            Debug.Log($"[CLIENT] Relay endpoint {endpoint.ConnectionType} {endpoint.Host}:{endpoint.Port}");
+
             unityTransport.SetRelayServerData(
-                joinAlloc.RelayServer.IpV4,
-                (ushort)joinAlloc.RelayServer.Port,
+                endpoint.Host,
+                (ushort)endpoint.Port,
                 joinAlloc.AllocationIdBytes,
                 joinAlloc.Key,
                 joinAlloc.ConnectionData,
                 joinAlloc.HostConnectionData,
-                true
+                useSecure
             );
+            Debug.Log("Relay data set on UnityTransport.");
 
             if (!networkManager.StartClient())
                 return (false, "StartClient() failed.");
+            Debug.Log($"StartClient called. IsClient={networkManager.IsClient}, LocalClientId={networkManager.LocalClientId}");
 
             // Wait only for THIS local client to connect
             everConnected = await WaitForLocalClientConnected(connectTimeoutSeconds);
@@ -230,8 +263,16 @@ public class NamedSessionManager : MonoBehaviour
 
         void OnConnected(ulong clientId)
         {
+            // LocalClientId is 0 until startclient, but by the time connected fires it's valid
             if (clientId == networkManager.LocalClientId)
                 tcs.TrySetResult(true);
+        }
+
+        void OnDisconnected(ulong clientId)
+        {
+            // If we get disconnected before ever connecting, fail early instead of waiting full timeout
+            if (clientId == networkManager.LocalClientId)
+                tcs.TrySetResult(false);
         }
 
         void OnTransportFailure()
@@ -240,17 +281,23 @@ public class NamedSessionManager : MonoBehaviour
         }
 
         networkManager.OnClientConnectedCallback += OnConnected;
+        networkManager.OnClientDisconnectCallback += OnDisconnected;
         networkManager.OnTransportFailure += OnTransportFailure;
 
         try
         {
             var delayTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds));
             var completed = await Task.WhenAny(tcs.Task, delayTask);
-            return completed == tcs.Task && tcs.Task.Result;
+
+            if (completed == tcs.Task)
+                return tcs.Task.Result;
+
+            return false; // timed out
         }
         finally
         {
             networkManager.OnClientConnectedCallback -= OnConnected;
+            networkManager.OnClientDisconnectCallback -= OnDisconnected;
             networkManager.OnTransportFailure -= OnTransportFailure;
         }
     }
