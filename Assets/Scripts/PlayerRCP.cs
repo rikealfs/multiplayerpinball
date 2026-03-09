@@ -1,6 +1,7 @@
 using Unity.Netcode;
 using UnityEngine;
 
+// From Tutorial
 public class PlayerRCP : NetworkBehaviour {
     public override void OnNetworkSpawn()
     {

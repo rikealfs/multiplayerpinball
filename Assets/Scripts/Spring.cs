@@ -14,10 +14,11 @@ public class Spring : MonoBehaviour
     {
         
     }
+
+    // Called when shoot input is received, adds force to the ball if it is on the spring
     void OnShoot()
     {
         Collider[] colliders = Physics.OverlapSphere(transform.position, 0.5f);
-
         foreach (Collider collider in colliders) 
         { 
             Ball ball = collider.GetComponent<Ball>();

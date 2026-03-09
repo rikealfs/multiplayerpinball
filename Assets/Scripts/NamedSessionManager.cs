@@ -15,10 +15,12 @@ using System.Collections.Generic;
 
 public class NamedSessionManager : MonoBehaviour
 {
+    //References
     [Header("References")]
     [SerializeField] private NetworkManager networkManager;
     [SerializeField] private UnityTransport unityTransport;
 
+    //Network settings
     [Header("Settings")]
     [SerializeField] private int maxPlayers = 2;
     [SerializeField] private float connectTimeoutSeconds = 30f;
@@ -39,15 +41,16 @@ public class NamedSessionManager : MonoBehaviour
     {
         ResolveRefs();
 
-        // Helpful debug events (will show you exactly what's happening)
+        // debug events
         networkManager.OnClientConnectedCallback += id => Debug.Log($"[NGO] CONNECTED: {id}");
         networkManager.OnClientDisconnectCallback += id => Debug.Log($"[NGO] DISCONNECTED: {id}");
         networkManager.OnTransportFailure += () => Debug.Log("[NGO] TRANSPORT FAILURE");
 
-        // Important when testing two builds on one machine
+        // Helps prevent disconect
         Application.runInBackground = true;
     }
 
+    // Resolves references and checks for common setup errors
     private void ResolveRefs()
     {
         if (!networkManager) networkManager = NetworkManager.Singleton;
@@ -59,8 +62,9 @@ public class NamedSessionManager : MonoBehaviour
         if (!unityTransport) throw new Exception("NetworkTransport is not UnityTransport (check NetworkManager).");
     }
 
+    
     private bool servicesReady = false;
-
+    // Ensures Unity Services are initialized and player is authenticated
     private async Task EnsureServicesReady()
     {
         if (servicesReady) return;
@@ -77,7 +81,7 @@ public class NamedSessionManager : MonoBehaviour
         servicesReady = true;
     }
 
-    // ---------- HOST ----------
+    // Host creates lobby and relay allocation, then starts hosting
     public async Task<(bool ok, string error)> HostCreateSession(string sessionName)
     {
         try
@@ -102,7 +106,7 @@ public class NamedSessionManager : MonoBehaviour
             Lobby lobby = await LobbyService.Instance.CreateLobbyAsync(sessionName, maxPlayers, createOptions);
             joinedLobbyId = lobby.Id;
 
-            bool useSecure = true; // dtls
+            bool useSecure = true;
             var endpoint = alloc.ServerEndpoints.First(e => e.ConnectionType == (useSecure ? "dtls" : "udp"));
 
             Debug.Log($"[HOST] Relay endpoint {endpoint.ConnectionType} {endpoint.Host}:{endpoint.Port}");
@@ -139,7 +143,7 @@ public class NamedSessionManager : MonoBehaviour
         }
     }
 
-    // ---------- SERVER LIST ----------
+    // Server list 
     public struct SessionRow
     {
         public string LobbyId;
@@ -148,6 +152,7 @@ public class NamedSessionManager : MonoBehaviour
         public int MaxPlayers;
     }
 
+    //Lists current sessions
     public async Task<(bool ok, string error, List<SessionRow> sessions)> ListSessionsAsync()
     {
         try
@@ -160,13 +165,13 @@ public class NamedSessionManager : MonoBehaviour
 
             foreach (var l in result.Results)
             {
-                // Filter OUT stale/invalid sessions (must contain joinCode)
+                // Filter OUT stale/invalid sessions
                 if (l.Data == null || !l.Data.TryGetValue(JoinCodeKey, out var codeObj)) continue;
                 if (string.IsNullOrWhiteSpace(codeObj.Value)) continue;
 
                 int players = l.Players?.Count ?? 0;
 
-                // Optional: hide full sessions
+                // Hide full sessions
                 if (players >= l.MaxPlayers) continue;
 
                 list.Add(new SessionRow
@@ -186,7 +191,7 @@ public class NamedSessionManager : MonoBehaviour
         }
     }
 
-    // ---------- CLIENT JOIN ----------
+    // Client joins lobby and relay allocation, then starts client
     public async Task<(bool ok, string error)> ClientJoinSessionByLobbyId(string lobbyId)
     {
         bool everConnected = false;
@@ -208,7 +213,7 @@ public class NamedSessionManager : MonoBehaviour
 
             Debug.Log($"Relay join OK. ip={joinAlloc.RelayServer.IpV4}:{joinAlloc.RelayServer.Port}");
 
-            bool useSecure = true; // MUST match host
+            bool useSecure = true; 
             var endpoint = joinAlloc.ServerEndpoints.First(e => e.ConnectionType == (useSecure ? "dtls" : "udp"));
 
             Debug.Log($"[CLIENT] Relay endpoint {endpoint.ConnectionType} {endpoint.Host}:{endpoint.Port}");
@@ -228,7 +233,6 @@ public class NamedSessionManager : MonoBehaviour
                 return (false, "StartClient() failed.");
             Debug.Log($"StartClient called. IsClient={networkManager.IsClient}, LocalClientId={networkManager.LocalClientId}");
 
-            // Wait only for THIS local client to connect
             everConnected = await WaitForLocalClientConnected(connectTimeoutSeconds);
 
             if (!everConnected)
@@ -241,7 +245,6 @@ public class NamedSessionManager : MonoBehaviour
         }
         catch (RelayServiceException e)
         {
-            // This is the error you hit when lobby is stale / relay alloc expired
             if (e.Message != null && e.Message.Contains("join code not found", StringComparison.OrdinalIgnoreCase))
                 return (false, "That session is stale (host likely closed). Refresh the list and try again.");
 
@@ -257,6 +260,7 @@ public class NamedSessionManager : MonoBehaviour
         }
     }
 
+    // Waits for the local client to connect with a timeout
     private async Task<bool> WaitForLocalClientConnected(float timeoutSeconds)
     {
         var tcs = new TaskCompletionSource<bool>();
@@ -270,7 +274,7 @@ public class NamedSessionManager : MonoBehaviour
 
         void OnDisconnected(ulong clientId)
         {
-            // If we get disconnected before ever connecting, fail early instead of waiting full timeout
+            // If disconnected before ever connecting, fail early instead of waiting full timeout
             if (clientId == networkManager.LocalClientId)
                 tcs.TrySetResult(false);
         }
@@ -292,7 +296,8 @@ public class NamedSessionManager : MonoBehaviour
             if (completed == tcs.Task)
                 return tcs.Task.Result;
 
-            return false; // timed out
+            return false; 
+            // timed out
         }
         finally
         {
@@ -302,7 +307,7 @@ public class NamedSessionManager : MonoBehaviour
         }
     }
 
-    // ---------- HEARTBEAT ----------
+    // Heartbeat loop to keep lobby alive while hosting. Stops when leaving lobby or on destroy.
     private void StartLobbyHeartbeat()
     {
         StopLobbyHeartbeat();
@@ -314,6 +319,7 @@ public class NamedSessionManager : MonoBehaviour
         _ = HeartbeatLoopAsync(joinedLobbyId, heartbeatCts.Token);
     }
 
+    // Stops the lobby heartbeat loop
     private void StopLobbyHeartbeat()
     {
         if (heartbeatCts != null)
@@ -324,6 +330,7 @@ public class NamedSessionManager : MonoBehaviour
         }
     }
 
+    // Sends heartbeat pings to the lobby service at regular intervals to keep the lobby alive
     private async Task HeartbeatLoopAsync(string lobbyId, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
@@ -342,6 +349,7 @@ public class NamedSessionManager : MonoBehaviour
         }
     }
 
+    // Leaves the lobby and stops hosting or disconnects from the relay and stops client
     private void OnDestroy()
     {
         StopLobbyHeartbeat();

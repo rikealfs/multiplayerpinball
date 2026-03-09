@@ -8,13 +8,14 @@ public class Pinball : NetworkBehaviour
     //public static Pinball Instance;
     public float hitStrenght = 8000f;
     public float dampening = 250f;
-
+    //hinges
     public HingeJoint leftHinge;
     public HingeJoint rightHinge;
-
+    //JointSprings for pressed and released state
     private JointSpring jointSpringReleased = new();
     private JointSpring jointSpringPressed = new();
 
+    //NetworkVariables to sync the state of the flippers across clients
     private NetworkVariable<bool> LeftPressed = new(
         false,
         NetworkVariableReadPermission.Everyone,
@@ -27,12 +28,12 @@ public class Pinball : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
-
+    //Prefabs for bumpers and pegs, not in use
     public GameObject weakBumper;
     public GameObject mediumBumper;
     public GameObject strongBumper;
     public GameObject peg;
-
+    //Positions for bumpers and pegs, not in use
     public GameObject position1;
     public GameObject position2;
     public GameObject position3;
@@ -41,8 +42,9 @@ public class Pinball : NetworkBehaviour
     public GameObject position6;
     public GameObject position7;
 
+    //Audio
     public AudioSource audioSource;
-
+    //Variables to track the last state of the flippers to avoid sending redundant ServerRPCs
     private bool lastLeft;
     private bool lastRight;
 
@@ -56,31 +58,31 @@ public class Pinball : NetworkBehaviour
         jointSpringReleased.targetPosition = leftHinge.limits.min;
     }
 
+    // Called when left flipper input is received
     private void OnLeftFlipper(InputValue value)
     {
+        // Checks ownership
         if (!IsOwner) return;
-
         bool pressed = value.isPressed;
         // send only on change
         if (pressed == lastLeft) return;  
         lastLeft = pressed;
-
         SetLeftServerRpc(pressed);
-
+        // audio
         if (audioSource) audioSource.Play();
     }
 
+    //Called when right flipper input is received
     private void OnRightFlipper(InputValue value)
     {
+        // Checks ownership
         if (!IsOwner) return;
-
         bool pressed = value.isPressed;
         // send only on change
         if (pressed == lastRight) return;
         lastRight = pressed;
-
         SetRightServerRpc(pressed);
-
+        // audio
         if (audioSource) audioSource.Play();
     }
 
@@ -98,7 +100,8 @@ public class Pinball : NetworkBehaviour
         leftHinge.spring = LeftPressed.Value ? jointSpringPressed : jointSpringReleased;
         rightHinge.spring = RightPressed.Value ? jointSpringPressed : jointSpringReleased;
     }
-    
+
+    //Method to add bumpers and pegs, not in use
     public void AddElement(int elementID,int positionID)
     {
         return;

@@ -8,74 +8,78 @@ namespace HelloWorld
 {
     public class HelloWorldManager : MonoBehaviour
     {
+        //GUI
         VisualElement rootVisualElement;
-
         TextField sessionNameField;
         Button hostButton;
         Button refreshButton;
-
         ListView sessionsList;
         List<NamedSessionManager.SessionRow> sessions = new();
-
         Label statusLabel;
-
+        //Network Elements
         [SerializeField] private NamedSessionManager namedSessionManager;
-
         [SerializeField] private NetworkObject pinballA;
         [SerializeField] private NetworkObject pinballB;
 
+        //for debugging
         private bool assignedB = false;
-
         private bool lastConnectedState = false;
         private string lastModeText = "";
 
+        
         void OnEnable()
         {
+            //helps avoid time outs
             Application.runInBackground = true;
+            //UI
             var uiDocument = GetComponent<UIDocument>();
             rootVisualElement = uiDocument.rootVisualElement;
             rootVisualElement.Clear();
-
+            //Gets NamedSessionManager 
             if (!namedSessionManager)
                 namedSessionManager = FindFirstObjectByType<NamedSessionManager>();
-
+            //field to input sesssion name
             sessionNameField = new TextField("Session Name") { value = "MySession" };
             sessionNameField.style.width = 240;
-
+            //Button to be host
             hostButton = CreateButton("HostButton", "Create Session (Host)");
+            //Button to refresh session list
             refreshButton = CreateButton("RefreshButton", "Refresh Sessions");
+            //Status label
             statusLabel = CreateLabel("StatusLabel", "Not Connected");
-
+            //List of sessions
             sessionsList = BuildSessionsList();
-
+            //Add to root
             rootVisualElement.Add(sessionNameField);
             rootVisualElement.Add(hostButton);
             rootVisualElement.Add(refreshButton);
             rootVisualElement.Add(new Label("Available Sessions:"));
             rootVisualElement.Add(sessionsList);
             rootVisualElement.Add(statusLabel);
-
+            //Button listeners
             hostButton.clicked += OnHostButtonClicked;
             refreshButton.clicked += OnRefreshClicked;
-
+            
             HookNetcodeStatusEvents();
-
             _ = RefreshSessionsAsync();
         }
 
+        // Updates UI
         void Update() => UpdateUI();
 
+        // Clean up event handlers
         void OnDisable()
         {
             hostButton.clicked -= OnHostButtonClicked;
             refreshButton.clicked -= OnRefreshClicked;
-
             UnhookNetcodeStatusEvents();
         }
 
+        // Button handlers
         void OnHostButtonClicked() => _ = HostFlowAsync();
         void OnRefreshClicked() => _ = RefreshSessionsAsync();
 
+        // Creates and starts a new session as Host
         async System.Threading.Tasks.Task HostFlowAsync()
         {
             try
@@ -96,6 +100,7 @@ namespace HelloWorld
             }
         }
 
+        // Queries Lobby for active sessions and updates the server list UI
         async System.Threading.Tasks.Task RefreshSessionsAsync()
         {
             if (!namedSessionManager)
@@ -118,6 +123,7 @@ namespace HelloWorld
             SetStatusText($"Found {sessions.Count} session(s).");
         }
 
+        // Attempts to join the selected lobby and start the client
         async System.Threading.Tasks.Task JoinSelectedLobbyAsync(string lobbyId, string lobbyName)
         {
             try
@@ -131,7 +137,7 @@ namespace HelloWorld
             }
         }
 
-        // --- Server list UI ---
+        //Builds the ListView for available sessions with join buttons
         ListView BuildSessionsList()
         {
             var listView = new ListView
@@ -184,7 +190,7 @@ namespace HelloWorld
             return listView;
         }
 
-        // --- Menu visibility ---
+        // Shows or hides the menu elements based on connection state
         void SetMenuVisible(bool visible)
         {
             sessionNameField.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
@@ -194,6 +200,7 @@ namespace HelloWorld
                 sessionsList.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
         }
 
+        // Updates the status text and menu visibility based on current network state
         void UpdateUI()
         {
             var nm = NetworkManager.Singleton;
@@ -217,7 +224,7 @@ namespace HelloWorld
             var mode = nm.IsHost ? "Host" : nm.IsServer ? "Server" : "Client";
             string modeText = $"Transport: {nm.NetworkConfig.NetworkTransport.GetType().Name}\nMode: {mode}";
 
-            // Only update if it changed (so disconnect messages don't instantly get overwritten)
+            // Only update if it changed
             if (modeText != lastModeText)
             {
                 lastModeText = modeText;
@@ -225,9 +232,10 @@ namespace HelloWorld
             }
         }
 
+        // Helper to update the status label text
         void SetStatusText(string text) => statusLabel.text = text;
 
-        // --- Ownership assignment ---
+        // Hooks events to assign ownership of pinballs when hosting and when clients connect
         private void HookOwnershipEvents()
         {
             var nm = NetworkManager.Singleton;
@@ -240,6 +248,7 @@ namespace HelloWorld
             nm.OnClientConnectedCallback += OnClientConnected;
         }
 
+        //Assigns PinballA to the host 
         private void OnServerStarted()
         {
             var nm = NetworkManager.Singleton;
@@ -249,6 +258,7 @@ namespace HelloWorld
                 pinballA.ChangeOwnership(nm.LocalClientId);
         }
 
+        //Assigns PinballB to the first client that connects
         private void OnClientConnected(ulong clientId)
         {
             var nm = NetworkManager.Singleton;
@@ -264,7 +274,7 @@ namespace HelloWorld
             }
         }
 
-        // --- Netcode status events (helps debug kicks/disconnects) ---
+        // Hooks events to detect disconnections and transport failures to update the UI accordingly
         private void HookNetcodeStatusEvents()
         {
             var nm = NetworkManager.Singleton;
@@ -274,6 +284,7 @@ namespace HelloWorld
             nm.OnTransportFailure += OnTransportFailure;
         }
 
+        // Unhooks the events
         private void UnhookNetcodeStatusEvents()
         {
             var nm = NetworkManager.Singleton;
@@ -283,6 +294,7 @@ namespace HelloWorld
             nm.OnTransportFailure -= OnTransportFailure;
         }
 
+        // Updates the status text when a client disconnects
         private void OnClientDisconnect(ulong clientId)
         {
             var nm = NetworkManager.Singleton;
@@ -292,12 +304,13 @@ namespace HelloWorld
                 SetStatusText("Disconnected from host.");
         }
 
+        // Updates the status text when a transport failure occurs
         private void OnTransportFailure()
         {
             SetStatusText("Transport failure (Relay/connection lost).");
         }
 
-        // --- UI helpers ---
+        //Creates button
         private Button CreateButton(string name, string text)
         {
             var button = new Button();
@@ -310,6 +323,7 @@ namespace HelloWorld
             return button;
         }
 
+        //Creates label
         private Label CreateLabel(string name, string content)
         {
             var label = new Label();

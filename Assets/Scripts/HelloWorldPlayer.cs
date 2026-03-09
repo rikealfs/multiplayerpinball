@@ -1,10 +1,12 @@
 using Unity.Netcode;
 using UnityEngine;
 
+//Script from Tutorial, mostly out of use
 namespace HelloWorld
 {
     public class HelloWorldPlayer : NetworkBehaviour
     {
+        
         public NetworkVariable<Vector3> Position = new NetworkVariable<Vector3>();
 
         public override void OnNetworkSpawn()
