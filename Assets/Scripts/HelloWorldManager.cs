@@ -1,105 +1,288 @@
 using System;
-using Unity.Netcode;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UIElements;
+using Unity.Netcode;
 
 namespace HelloWorld
 {
     public class HelloWorldManager : MonoBehaviour
     {
         VisualElement rootVisualElement;
+
+        TextField sessionNameField;
         Button hostButton;
-        Button clientButton;
-        Button serverButton;
-        Button moveButton;
+        Button refreshButton;
+
+        ListView sessionsList;
+        List<NamedSessionManager.SessionRow> sessions = new();
+
         Label statusLabel;
+
+        [SerializeField] private NamedSessionManager namedSessionManager;
+
         [SerializeField] private NetworkObject pinballA;
         [SerializeField] private NetworkObject pinballB;
+
+        private bool assignedB = false;
 
         void OnEnable()
         {
             var uiDocument = GetComponent<UIDocument>();
             rootVisualElement = uiDocument.rootVisualElement;
+            rootVisualElement.Clear();
 
-            hostButton = CreateButton("HostButton", "Host");
-            clientButton = CreateButton("ClientButton", "Client");
-            serverButton = CreateButton("ServerButton", "Server");
-            moveButton = CreateButton("MoveButton", "Move");
+            if (!namedSessionManager)
+                namedSessionManager = FindFirstObjectByType<NamedSessionManager>();
+
+            sessionNameField = new TextField("Session Name") { value = "MySession" };
+            sessionNameField.style.width = 240;
+
+            hostButton = CreateButton("HostButton", "Create Session (Host)");
+            refreshButton = CreateButton("RefreshButton", "Refresh Sessions");
             statusLabel = CreateLabel("StatusLabel", "Not Connected");
 
-            rootVisualElement.Clear();
+            sessionsList = BuildSessionsList();
+
+            rootVisualElement.Add(sessionNameField);
             rootVisualElement.Add(hostButton);
-            rootVisualElement.Add(clientButton);
-            rootVisualElement.Add(serverButton);
-            rootVisualElement.Add(moveButton);
+            rootVisualElement.Add(refreshButton);
+            rootVisualElement.Add(new Label("Available Sessions:"));
+            rootVisualElement.Add(sessionsList);
             rootVisualElement.Add(statusLabel);
 
             hostButton.clicked += OnHostButtonClicked;
-            clientButton.clicked += OnClientButtonClicked;
-            serverButton.clicked += OnServerButtonClicked;
-            moveButton.clicked += SubmitNewPosition;
+            refreshButton.clicked += OnRefreshClicked;
+
+            HookNetcodeStatusEvents();
+
+            _ = RefreshSessionsAsync();
         }
 
-        void Update()
-        {
-            UpdateUI();
-        }
+        void Update() => UpdateUI();
 
         void OnDisable()
         {
             hostButton.clicked -= OnHostButtonClicked;
-            clientButton.clicked -= OnClientButtonClicked;
-            serverButton.clicked -= OnServerButtonClicked;
-            moveButton.clicked -= SubmitNewPosition;
+            refreshButton.clicked -= OnRefreshClicked;
+
+            UnhookNetcodeStatusEvents();
         }
 
-        void OnHostButtonClicked()
+        void OnHostButtonClicked() => _ = HostFlowAsync();
+        void OnRefreshClicked() => _ = RefreshSessionsAsync();
+
+        async System.Threading.Tasks.Task HostFlowAsync()
         {
-            NetworkManager.Singleton.StartHost();
-            HookOwnershipEvents();
+            try
+            {
+                assignedB = false;
+                string sessionName = sessionNameField.value?.Trim();
+
+                HookOwnershipEvents();
+
+                var (ok, error) = await namedSessionManager.HostCreateSession(sessionName);
+                SetStatusText(ok ? $"Hosting: {sessionName}" : $"Host failed: {error}");
+
+                if (ok) await RefreshSessionsAsync();
+            }
+            catch (Exception e)
+            {
+                SetStatusText($"Host failed: {e.Message}");
+            }
         }
 
-        void OnServerButtonClicked()
+        async System.Threading.Tasks.Task RefreshSessionsAsync()
         {
-            NetworkManager.Singleton.StartServer();
-            HookOwnershipEvents();
+            if (!namedSessionManager)
+            {
+                SetStatusText("NamedSessionManager missing.");
+                return;
+            }
+
+            var (ok, error, list) = await namedSessionManager.ListSessionsAsync();
+            if (!ok)
+            {
+                SetStatusText($"Refresh failed: {error}");
+                return;
+            }
+
+            sessions.Clear();
+            sessions.AddRange(list);
+            sessionsList.Rebuild();
+
+            SetStatusText($"Found {sessions.Count} session(s).");
         }
-        void OnClientButtonClicked() => NetworkManager.Singleton.StartClient();
 
+        async System.Threading.Tasks.Task JoinSelectedLobbyAsync(string lobbyId, string lobbyName)
+        {
+            try
+            {
+                var (ok, error) = await namedSessionManager.ClientJoinSessionByLobbyId(lobbyId);
+                SetStatusText(ok ? $"Joined: {lobbyName}" : $"Join failed: {error}");
+            }
+            catch (Exception e)
+            {
+                SetStatusText($"Join failed: {e.Message}");
+            }
+        }
 
+        // --- Server list UI ---
+        ListView BuildSessionsList()
+        {
+            var listView = new ListView
+            {
+                name = "SessionsList",
+                itemsSource = sessions
+            };
+            listView.style.width = 420;
+            listView.style.height = 220;
+
+            listView.makeItem = () =>
+            {
+                var row = new VisualElement();
+                row.style.flexDirection = FlexDirection.Row;
+                row.style.justifyContent = Justify.SpaceBetween;
+                row.style.alignItems = Align.Center;
+                row.style.paddingLeft = 6;
+                row.style.paddingRight = 6;
+                row.style.height = 28;
+
+                var label = new Label { name = "RowLabel" };
+                label.style.unityTextAlign = TextAnchor.MiddleLeft;
+
+                var joinBtn = new Button { name = "JoinRowButton", text = "Join" };
+                joinBtn.style.width = 80;
+
+                row.Add(label);
+                row.Add(joinBtn);
+                return row;
+            };
+
+            listView.bindItem = (element, index) =>
+            {
+                var row = sessions[index];
+
+                var label = element.Q<Label>("RowLabel");
+                var joinBtn = element.Q<Button>("JoinRowButton");
+
+                label.text = $"{row.Name}   ({row.Players}/{row.MaxPlayers})";
+
+                // Clear previous click handler
+                if (joinBtn.userData is Action oldHandler)
+                    joinBtn.clicked -= oldHandler;
+
+                Action handler = () => { _ = JoinSelectedLobbyAsync(row.LobbyId, row.Name); };
+                joinBtn.userData = handler;
+                joinBtn.clicked += handler;
+            };
+
+            return listView;
+        }
+
+        // --- Menu visibility ---
+        void SetMenuVisible(bool visible)
+        {
+            sessionNameField.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+            hostButton.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+            refreshButton.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+            if (sessionsList != null)
+                sessionsList.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
+        void UpdateUI()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null)
+            {
+                SetMenuVisible(false);
+                SetStatusText("NetworkManager not found");
+                return;
+            }
+
+            bool connected = nm.IsClient || nm.IsServer;
+            SetMenuVisible(!connected);
+
+            if (!connected)
+                return;
+
+            var mode = nm.IsHost ? "Host" : nm.IsServer ? "Server" : "Client";
+            SetStatusText($"Transport: {nm.NetworkConfig.NetworkTransport.GetType().Name}\nMode: {mode}");
+        }
+
+        void SetStatusText(string text) => statusLabel.text = text;
+
+        // --- Ownership assignment ---
         private void HookOwnershipEvents()
         {
-            // Avoid double-subscribing
-            NetworkManager.Singleton.OnServerStarted -= OnServerStarted;
-            NetworkManager.Singleton.OnServerStarted += OnServerStarted;
+            var nm = NetworkManager.Singleton;
+            if (nm == null) return;
 
-            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
-            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
+            nm.OnServerStarted -= OnServerStarted;
+            nm.OnServerStarted += OnServerStarted;
+
+            nm.OnClientConnectedCallback -= OnClientConnected;
+            nm.OnClientConnectedCallback += OnClientConnected;
         }
 
         private void OnServerStarted()
         {
-            // Assign machine A to host (Player 1)
-            if (pinballA != null && pinballA.IsSpawned)
-                pinballA.ChangeOwnership(NetworkManager.Singleton.LocalClientId);
+            var nm = NetworkManager.Singleton;
+            if (nm == null) return;
 
-            // machine B stays unowned until a client joins
+            if (pinballA != null && pinballA.IsSpawned)
+                pinballA.ChangeOwnership(nm.LocalClientId);
         }
 
         private void OnClientConnected(ulong clientId)
         {
-            if (!NetworkManager.Singleton.IsServer) return;
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsServer) return;
 
-            // If this is the host connecting callback, ignore it (host already got A above)
-            if (clientId == NetworkManager.Singleton.LocalClientId) return;
+            if (clientId == nm.LocalClientId) return;
 
-            // First remote client gets machine B
-            if (pinballB != null && pinballB.IsSpawned)
+            if (!assignedB && pinballB != null && pinballB.IsSpawned)
+            {
                 pinballB.ChangeOwnership(clientId);
+                assignedB = true;
+                Debug.Log($"Assigned PinballB to client {clientId}");
+            }
         }
 
-        // Disclaimer: This is not the recommended way to create and stylize the UI elements, it is only utilized for the sake of simplicity.
-        // The recommended way is to use UXML and USS. Please see this link for more information: https://docs.unity3d.com/Manual/UIE-USS.html
+        // --- Netcode status events (helps debug kicks/disconnects) ---
+        private void HookNetcodeStatusEvents()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null) return;
+
+            nm.OnClientDisconnectCallback += OnClientDisconnect;
+            nm.OnTransportFailure += OnTransportFailure;
+        }
+
+        private void UnhookNetcodeStatusEvents()
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null) return;
+
+            nm.OnClientDisconnectCallback -= OnClientDisconnect;
+            nm.OnTransportFailure -= OnTransportFailure;
+        }
+
+        private void OnClientDisconnect(ulong clientId)
+        {
+            var nm = NetworkManager.Singleton;
+            if (nm == null) return;
+
+            if (clientId == nm.LocalClientId)
+                SetStatusText("Disconnected from host.");
+        }
+
+        private void OnTransportFailure()
+        {
+            SetStatusText("Transport failure (Relay/connection lost).");
+        }
+
+        // --- UI helpers ---
         private Button CreateButton(string name, string text)
         {
             var button = new Button();
@@ -120,75 +303,6 @@ namespace HelloWorld
             label.style.color = Color.black;
             label.style.fontSize = 18;
             return label;
-        }
-
-        void UpdateUI()
-        {
-            if (NetworkManager.Singleton == null)
-            {
-                SetStartButtons(false);
-                SetMoveButton(false);
-                SetStatusText("NetworkManager not found");
-                return;
-            }
-
-            if (!NetworkManager.Singleton.IsClient && !NetworkManager.Singleton.IsServer)
-            {
-                SetStartButtons(true);
-                SetMoveButton(false);
-                SetStatusText("Not connected");
-            }
-            else
-            {
-                SetStartButtons(false);
-                SetMoveButton(true);
-                UpdateStatusLabels();
-            }
-        }
-
-        void SetStartButtons(bool state)
-        {
-            hostButton.style.display = state ? DisplayStyle.Flex : DisplayStyle.None;
-            clientButton.style.display = state ? DisplayStyle.Flex : DisplayStyle.None;
-            serverButton.style.display = state ? DisplayStyle.Flex : DisplayStyle.None;
-        }
-
-        void SetMoveButton(bool state)
-        {
-            moveButton.style.display = state ? DisplayStyle.Flex : DisplayStyle.None;
-            if (state)
-            {
-                moveButton.text = NetworkManager.Singleton.IsServer ? "Move" : "Request Position Change";
-            }
-        }
-
-        void SetStatusText(string text) => statusLabel.text = text;
-
-        void UpdateStatusLabels()
-        {
-            var mode = NetworkManager.Singleton.IsHost ? "Host" : NetworkManager.Singleton.IsServer ? "Server" : "Client";
-            string transport = "Transport: " + NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetType().Name;
-            string modeText = "Mode: " + mode;
-            SetStatusText($"{transport}\n{modeText}");
-        }
-
-        void SubmitNewPosition()
-        {
-            if (NetworkManager.Singleton.IsServer && !NetworkManager.Singleton.IsClient)
-            {
-                foreach (ulong uid in NetworkManager.Singleton.ConnectedClientsIds)
-                {
-                    var playerObject = NetworkManager.Singleton.SpawnManager.GetPlayerNetworkObject(uid);
-                    var player = playerObject.GetComponent<HelloWorldPlayer>();
-                    player.Move();
-                }
-            }
-            else if (NetworkManager.Singleton.IsClient)
-            {
-                var playerObject = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
-                var player = playerObject.GetComponent<HelloWorldPlayer>();
-                player.Move();
-            }
         }
     }
 }
